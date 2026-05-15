@@ -93,16 +93,14 @@ pub enum TypeExpr {
     },
     Generic {
         ident: Ident,
-        params: Vec<TypeExpr>, // identifiers of generic type parameters
+        args: Vec<TypeExpr>, // identifiers of generic type parameters
     },
 }
 
-// used in struct/sum declarations impl items.
-// struct A impl Trait[i32]
-// (the [T] is optional. only for generic traits)
-// maybe rename to TraitImplDecl or something. I need to sleep.
+// used in impl declaration items.
+// Trait[type1] or Trait[type1, type2]
 #[derive(Debug, Clone, Serialize)]
-pub struct TraitBound {
+pub struct ImplDeclPart {
     pub ident: Ident,
     pub args: Vec<TypeExpr>,
 }

@@ -7,7 +7,7 @@ use moc_common::{
     ast::Ast,
     decl::{Decl, DeclKind, FnSignature, Variant, VariantData},
     error::{ExprParseResult, ParserError},
-    expr::{Expr, ExprKind, GenericParam, Ident, TraitBound, TypeExpr},
+    expr::{Expr, ExprKind, GenericParam, Ident, ImplDeclPart, TypeExpr},
     op::{BinaryOp, UnaryOp},
     stmt::{Stmt, StmtKind},
     token::{Token, TokenKind},
@@ -18,7 +18,8 @@ pub struct Parser {
     current_token: Option<Token>,
     ast: Ast,
     pub errors: Vec<ParserError>,
-    only_expr: bool, // if true only parses an expresion, if false, parses full program structure.
+    only_expr: bool, // if true only parses an expression, if false, parses full program structure.
+    bracket_depth: usize,
 }
 
 /*
@@ -33,6 +34,7 @@ impl Parser {
             ast: Ast::new(),
             errors: Vec::new(),
             only_expr,
+            bracket_depth: 0
         };
         parser
     }
@@ -326,6 +328,10 @@ impl Parser {
                         self.advance();
                         break;
                     }
+                    TokenKind::Impl => {
+                        let impl_decl = self.parse_impl_decl()?;
+                        self.ast.push(impl_decl);
+                    }
                     _ => {
                         // Just add error, don't stop the loop...
                         self.errors.push(ParserError::unexpected_token(
@@ -345,27 +351,37 @@ impl Parser {
 
     fn synchronize_top_level(&mut self) {
         // Consume the offending token that triggered the error.
-        // If you don't do this, you might end up in an infinite loop 
+        // If you don't do this, you might end up in an infinite loop
         // re-evaluating the same bad token.
-        self.advance(); 
-    
-        // Skip tokens until we find something that looks like 
+        self.advance();
+
+        // Skip tokens until we find something that looks like
         // the start of a valid top-level declaration.
-        self.skip_tokens_unless_of_kinds(&[
-            TokenKind::Fn,
-            TokenKind::Struct,
-            TokenKind::Use,
-            TokenKind::Sum,
-            TokenKind::Trait,
-        ]);
+
+        // TODO: We need to rewrite all of this if we start to allow use, function, struct and sum declarations inside of functions ...
+        self.skip_tokens_if_predicate(|parser| {
+            let is_unambiguous_decl = parser.is_next_of_kinds(&[
+                TokenKind::Fn,
+                TokenKind::Struct,
+                TokenKind::Use, 
+                TokenKind::Sum,
+                TokenKind::Trait,
+            ]);
+
+            let is_top_lvl_impl_decl = parser.is_next_of_kind(TokenKind::Impl) && parser.bracket_depth == 0;
+            let keep_skipping = !(is_unambiguous_decl || is_top_lvl_impl_decl);
+            // we only stop skipping if we find an unambiguous declaration (which is indicated by the tokens Fn, Struct Use, Sum and Trait)
+            // or if we find an impl token that isnt inside of square brackets 
+            keep_skipping
+        });
     }
 
-    // Parsing:
-    // use <module_path_element>(:<module_path_element>)* ("<alias>")?
-    //
-    // # Examples:
-    // use io | use io "foo"
-    // use io:print | use io:print "printie"
+    /// Parses use declaration assuming to peek 'use' token
+    /// use_decl <- 'use' ident(':'ident)* string_literal?
+    ///
+    /// # Examples:
+    /// use io | use io "foo"
+    /// use io:print | use io:print "printie"
     fn parse_use_decl(&mut self) -> Result<Decl, ParserError> {
         self.advance(); // consume 'use'
         let mut span = self.start_span_at_current();
@@ -382,6 +398,9 @@ impl Parser {
         Ok(Decl::new(DeclKind::Use { path, alias }, span))
     }
 
+    /// fn_signature <- 'fn' ident generic_type_params? '(' ( fn_param ( ',' fn_param )* )* ')' type_expr?
+    /// generic_type_params <- '['(ident(',' ident)*)?']'
+    /// fn_param <- type_expr ident
     fn parse_fn_signature(&mut self) -> Result<FnSignature, ParserError> {
         self.advance(); // consume 'fn'
 
@@ -431,7 +450,7 @@ impl Parser {
         })
     }
 
-    // fn abc() ret_type { /*...*/ }
+    /// fn_decl <- fn_signature code_block
     fn parse_fn_decl(&mut self) -> Result<Decl, ParserError> {
         let mut span = self.start_span_at_next();
 
@@ -444,6 +463,8 @@ impl Parser {
         Ok(Decl::new(DeclKind::Fn { signature, body }, span))
     }
 
+    /// code_block <- '{' (stmt lt)* '}'
+    /// lt <- line_break | ';'
     fn parse_code_block(&mut self) -> Result<CodeBlock, ParserError> {
         debug!("parsing code block");
         self.try_consume_token(TokenKind::OpenBrace, "Expected open brace")?;
@@ -462,7 +483,15 @@ impl Parser {
         }
     }
 
-    /// Parses optional generic parameters: '[T, U]' or '[T impl Trait1 Trait2]
+
+    /// Parses optional generic parameters with optional trait bounds
+    /// generic_params <- '[' ( generic_param ( ',' generic_param ','? )* )* ']'
+    /// generic_param <- ident ('impl' (ident)+)*
+    ///
+    /// Examples:
+    /// '[T, U]'
+    /// '[T impl Trait1 Trait2]
+    /// '[T impl Trait1 Trait2, U impl Trait1 Trait2]
     fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>, ParserError> {
         let mut generics = Vec::new();
         // Check if there is an open paren. If not, return empty vec!
@@ -516,8 +545,9 @@ impl Parser {
     }
 
     /// Parses optional trait implementations: 'impl Trait1, Trait2' or 'impl Trait1[i32], Trait2[string]
-    fn parse_impl_traits(&mut self) -> Result<Vec<TraitBound>, ParserError> {
+    fn parse_impl_decl(&mut self) -> Result<Decl, ParserError> {
         let mut traits = Vec::new();
+        let mut span = self.start_span_at_next();
         if self.matches_advance(TokenKind::Impl) {
             loop {
                 self.try_consume_token(TokenKind::Ident, "Expected trait")?;
@@ -550,16 +580,18 @@ impl Parser {
                     }
                 }
 
-                traits.push(TraitBound { ident, args });
+                traits.push(ImplDeclPart { ident, args });
                 if !self.matches_advance(TokenKind::Comma) {
                     break;
                 }
                 self.skip_line_terminators();
             }
         }
-        Ok(traits)
+        self.end_span(&mut span);
+        Ok(Decl { span, kind: DeclKind::Impl { parts: traits } })
     }
 
+    /// stmt <- ret_stmt | defer_stmt | break_stmt | next_stmt | code_block | var_decl | expr
     fn parse_stmt(&mut self) -> Result<Stmt, ParserError> {
         let mut span = self.start_span_at_next(); // this span is only used when no statement could be parsed
         if let Some(token) = self.peek().cloned() {
@@ -619,7 +651,10 @@ impl Parser {
         ))
     }
 
-    // Parses statements of this form:
+
+    // var_decl <- ident type_expr? ':=' expr
+    //
+    // Examples:
     // a i32 := 10    | DeclAssignmt
     // a := 10        | DeclAssignmt (no type identifier. type to be inferred)
     // a [3]i32 := 10 | DeclAssignmt with complex type
@@ -685,7 +720,8 @@ impl Parser {
         )))
     }
 
-    // like '[1,2,3,4,5,6,7,8]'
+    // array_literal <- '[' ( expr ( ',' expr )* )* ']'
+    // Example: '[1,2,3,4,5,6,7,8]'
     fn parse_array_literal(&mut self) -> Result<Expr, ParserError> {
         let mut elements = Vec::new();
         let mut span = self.start_span_at_current();
@@ -721,11 +757,15 @@ impl Parser {
         return Ok(Expr::new(ExprKind::ArrayLiteral { elements }, span));
     }
 
+
+    // type_expr <- array_type | pointer_type | ident_type
     #[track_caller]
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParserError> {
         debug!("parsing type expr from: {}", std::panic::Location::caller());
         let mut span = self.start_span_at_next();
-        // array type
+
+
+        // array_type <- '[' decimal_integer_number_literal? ']' type_expr
         let mut array_length = None;
         if self.matches_advance(TokenKind::OpenBrack) {
             if self.matches_any_advance(&[TokenKind::DecimalIntegerNumberLiteral]) {
@@ -744,23 +784,27 @@ impl Parser {
             });
         }
 
-        // pointer type
+        // pointer_type <- '*' type_expr
         if self.matches_advance(TokenKind::Star) {
             return Ok(TypeExpr::pointer(self.parse_type_expr()?));
         }
 
         // identifier with optional module path prefix
+        // module_prefix <- (ident ':')+
+        // generic_args <- '[' (type_expr','*)* ']'
+        //
+        // ident_type <- module_prefix? ident generic_args?
         if self.matches_any_advance(&[TokenKind::Ident]) {
             let base_ident = self.parse_path_or_ident();
 
             // generic type
             if self.matches_advance(TokenKind::OpenBrack) {
-                let mut generic_params = Vec::new();
+                let mut generic_args = Vec::new();
                 if !self.matches(TokenKind::CloseBrack) {
                     loop {
                         self.skip_line_terminators();
 
-                        generic_params.push(self.parse_type_expr()?);
+                        generic_args.push(self.parse_type_expr()?);
                         self.skip_line_terminators();
 
                         if self.matches_advance(TokenKind::CloseBrack) {
@@ -780,7 +824,7 @@ impl Parser {
                 }
                 return Ok(TypeExpr::Generic {
                     ident: base_ident,
-                    params: generic_params,
+                    args: generic_args,
                 });
             }
 
@@ -799,6 +843,7 @@ impl Parser {
         )
     }
 
+    // fn_call_args <- '(' (expr ','*)* ')'
     fn parse_fn_call_args(&mut self) -> Result<Vec<Expr>, ParserError> {
         // parse arguments
         let mut args = Vec::new();
@@ -840,7 +885,7 @@ impl Parser {
     // TODO: Make it be an expression for break with value.
     //
     // Parsing:
-    // for <bool expr>? <code block>
+    // for_loop <- 'for' expr? code_block
     fn parse_for_loop(&mut self) -> Result<Expr, ParserError> {
         let mut span = self.start_span_at_current();
         if let Some(token) = self.peek()
@@ -871,6 +916,8 @@ impl Parser {
 
     // TODO:
     // if is expr (like switch or match)
+    //
+    // if_else_expr <- 'if' code_block ('else' code_block)?
     fn parse_if_else_expr(&mut self) -> Result<Expr, ParserError> {
         let mut span = self.start_span_at_current();
         let condition = self.parse_expression()?.boxed();
@@ -892,6 +939,7 @@ impl Parser {
         ))
     }
 
+    /// defer_stmt <- 'defer' stmt
     fn parse_defer_stmt(&mut self) -> Result<Stmt, ParserError> {
         self.advance();
         let mut span = self.start_span_at_current();
@@ -900,6 +948,7 @@ impl Parser {
         Ok(Stmt::new(StmtKind::Defer(Box::new(stmt)), span))
     }
 
+    /// break_stmt <- 'break' expr?
     fn parse_break_stmt(&mut self) -> Result<Stmt, ParserError> {
         self.advance();
         let mut span = self.start_span_at_current();
@@ -912,6 +961,7 @@ impl Parser {
         Ok(Stmt::new(StmtKind::Break { value: Some(expr) }, span))
     }
 
+    /// ret_stmt <- 'ret' expr?
     fn parse_ret_stmt(&mut self) -> Result<Stmt, ParserError> {
         self.advance();
         let mut span = self.start_span_at_current();
@@ -930,9 +980,15 @@ impl Parser {
         a int
         b int
     }
+    struct Foo[T] {
+        a T
+        b T
+    }
     unit struct:
     struct Foo {}
      */
+    ///
+    /// struct_decl <- 'struct' ident generic_params?
     fn parse_struct_decl(&mut self) -> Result<Decl, ParserError> {
         self.advance();
         let mut span = self.start_span_at_current();
@@ -940,7 +996,7 @@ impl Parser {
         let struct_ident = self.unwrap_current_token().unwrap_value();
 
         let generics = self.parse_generic_params()?;
-        let impl_traits = self.parse_impl_traits()?;
+        //let impl_traits = self.parse_impl_traits()?;
 
         self.skip_tokens(TokenKind::LineBreak);
         self.try_consume_token(TokenKind::OpenBrace, "Expected open brace or impl")?; // this error message is weird
@@ -972,12 +1028,13 @@ impl Parser {
                 ident: struct_ident,
                 fields,
                 generics,
-                impl_traits,
             },
             span,
         ))
     }
 
+    ///
+    /// sum_decl <- 'sum' ident
     fn parse_sum_decl(&mut self) -> Result<Decl, ParserError> {
         self.advance(); // consume 'sum' (assuming TokenKind::Sum)
         let mut span = self.start_span_at_current();
@@ -986,7 +1043,6 @@ impl Parser {
         let sum_ident = self.unwrap_current_token().unwrap_value();
 
         let generics = self.parse_generic_params()?;
-        let impl_traits = self.parse_impl_traits()?;
 
         self.skip_line_terminators();
         self.try_consume_token(TokenKind::OpenBrace, "Expected '{'")?;
@@ -1067,7 +1123,6 @@ impl Parser {
             DeclKind::Sum {
                 ident: sum_ident,
                 generics,
-                impl_traits,
                 variants,
             },
             span,
@@ -1121,7 +1176,7 @@ impl Parser {
 
     // :Utils
 
-    /// Parses a path or simple ident
+    /// Parses a path or simple ident.
     /// Assumes the first identifier has just been consumed.
     fn parse_path_or_ident(&mut self) -> Ident {
         let first_ident = self.unwrap_current_token().unwrap_value();
@@ -1164,8 +1219,16 @@ impl Parser {
     fn advance(&mut self) -> Option<Token> {
         self.current_token = self.token_stream.next();
 
+        if let Some(current_token) = &self.current_token() {
+            match current_token.kind  {
+                TokenKind::OpenBrack => self.bracket_depth += 1,
+                TokenKind::CloseBrack => self.bracket_depth = self.bracket_depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+
         // Debug info:
-        if let Some(current_token) = self.current_token() {
+        if let Some(current_token) = &self.current_token() {
             if let Some(peeked_token) = self.token_stream.peek().cloned() {
                 debug!(
                     "{} advanced from {}, peeking {}",

@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::{
-    CodeBlock, CodeSpan, TypedVar, expr::{Expr, GenericParam, Ident, TraitBound, TypeExpr}
+    CodeBlock, CodeSpan, TypedVar, expr::{Expr, GenericParam, Ident, ImplDeclPart, TypeExpr}
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,18 +27,19 @@ pub enum DeclKind {
         ident: String,
         fields: Vec<TypedVar>,
         generics: Vec<GenericParam>, // e.g., ["T", "U"]
-        impl_traits: Vec<TraitBound>,     // NEW: e.g., [PartialOrd]
     },
     Sum {
         ident: String,
         generics: Vec<GenericParam>,
-        impl_traits: Vec<TraitBound>,
         variants: Vec<Variant>,
     },
     Trait {
         ident: String,
         generics: Vec<GenericParam>, // Traits can be generic too!
         methods: Vec<FnSignature>,
+    },
+    Impl {
+        parts: Vec<ImplDeclPart>
     },
     // global variable/constant?
     // Only for debugging stuff! If I want to just test parsing expressions without all the other shebang.
