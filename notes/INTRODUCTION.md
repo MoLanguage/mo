@@ -1,5 +1,5 @@
 
-```
+```rust
 use std:io:print
 
 fn main() {
@@ -21,7 +21,7 @@ The compiler is written in Rust.
 
 # Project status
 
-Mo is still in early development, contributions are welcome.
+Mo is still in very early development in the draft stage you could say, contributions and ideas are welcome though.
 
 This is a long-term hobby project that could eventually evolve into a full production-grade language. Maybe. If not it's a fun intellectual challenge for my brain and something I can be proud of.
 
