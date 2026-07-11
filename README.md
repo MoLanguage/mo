@@ -1,7 +1,7 @@
-# moc
-This is the repository of what's meant to become the Mo compiler. At the moment, sadly it's still just a glorified parser, but that will change soon :)
+# The Mo Programming Language
+This is the repository of what's meant to become the Mo programming language. At the moment, sadly it's mostly just a glorified parser as I'm figuring out things.
 
-If you're interested in more details, have a look at the [Introduction](https://github.com/MoLanguage/mo/blob/main/notes/INTRODUCTION.md)
+If you're interested in more details about the languages design philosophy, planned features, syntax and concepts, have a look at the [Introduction](https://github.com/MoLanguage/mo/blob/main/notes/INTRODUCTION.md) document.
 
 # Build
 To try out the compiler/parser
