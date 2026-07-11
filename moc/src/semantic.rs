@@ -1,6 +1,7 @@
+#![allow(dead_code)]
 use std::collections::HashMap;
 
-use moc_common::{ast::Ast};
+use crate::{ast::Ast};
 
 // builtin types:
 // Int8, Int16, Int32, Int64
@@ -81,8 +82,8 @@ impl SemanticAnalyzer {
 
     fn analyze(&mut self) -> SymbolTable {
         let decls = SymbolTable::new();
-        for decl in &self.ast {
-            
+        for _decl in &self.ast {
+        	todo!()
         }
         decls
     }

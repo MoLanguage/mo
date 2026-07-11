@@ -1,15 +1,14 @@
 [package]
 name = "mo"
-description = "Command Line Interface for the Mo compiler"
+description = "Command Line Interface binary for the Mo compiler"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
-moc-main = { path = "../moc-main" }
-moc-common = { path = "../moc-common" }
+moc = { path = "../moc" }
 moc-llvm = { path = "../moc-llvm" }
 simple_logger = "5.2.0"
-ron = "0.12.1"
 serde = "1.0.228"
 ariadne = { git = "https://codeberg.org/zesterer/ariadne.git", version = "0.7.0" }
+ron.workspace = true

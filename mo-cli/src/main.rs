@@ -1,6 +1,5 @@
 use clap::Parser;
-use moc_common::debug_utils;
-use moc_main::CompilerOptions;
+use moc::{debug_utils, CompilerOptions};
 use ron::{extensions::Extensions, ser::PrettyConfig};
 
 #[derive(Parser, Debug)]
@@ -24,7 +23,7 @@ fn main() {
     let mut options = CompilerOptions::default();
     options.emit_tokens = args.print_tokens;
     options.emit_ast = args.print_ast;
-    let result = moc_main::compile_file(args.path, options);
+    let result = moc::compile_file(args.path, options);
 
     if let Some(tokens) = result.tokens {
         debug_utils::print_tokens(&tokens);

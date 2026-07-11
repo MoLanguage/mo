@@ -2,9 +2,9 @@ use std::str::Chars;
 
 use itertools::{PeekNth, peek_nth};
 use log::debug;
-use moc_common::error::{LexerError, LexerResult};
-use moc_common::token::{NumberLiteralKind, Token, TokenKind, TokenKind::*};
-use moc_common::{CodeLocation, CodeSpan};
+use crate::error::{LexerError, LexerResult};
+use crate::token::{NumberLiteralKind, Token, TokenKind, TokenKind::*};
+use crate::{CodeLocation, CodeSpan};
 
 #[derive(Clone)]
 pub struct Lexer<'a> {

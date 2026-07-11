@@ -1,4 +1,7 @@
 [workspace]
-members = ["moc-cli", "moc-parser", "moc-llvm", "moc-semantic", "moc-main", "moc-common"]
-
 resolver = "3"
+members = ["mo-cli", "moc-llvm", "moc"]
+
+
+[workspace.dependencies]
+ron = "0.12.1"

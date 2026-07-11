@@ -2,7 +2,7 @@ use std::{collections::VecDeque, usize, vec::IntoIter};
 
 use itertools::{PeekNth, peek_nth};
 use log::debug;
-use moc_common::{
+use crate::{
     CodeBlock, CodeSpan, ModulePath, TypedVar,
     ast::Ast,
     decl::{Decl, DeclKind, FnSignature, Variant, VariantData},
@@ -1284,6 +1284,7 @@ impl Parser {
     }
 
     /// Skips all tokens that are not of the given kinds until it hits a token of the kinds given
+    #[allow(dead_code)]
     fn skip_tokens_unless_of_kinds(&mut self, token_kinds: &[TokenKind]) {
         self.skip_tokens_if_predicate(|parser| !parser.is_next_of_kinds(token_kinds));
     }
