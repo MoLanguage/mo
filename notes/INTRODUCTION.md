@@ -287,3 +287,25 @@ addr u64 = cast:[u64](ptr)
 
 ### Memory management
 
+Memory management will use passed allocators and context allocators like in Zig and Odin. The details still need to be figured out.
+
+```rust
+array Array[u8, 1024] = zero
+	
+slice Slice[u8] = alloc.alloc:[u8](1024) 
+
+// Because it's a Slice, the free function knows exactly how many bytes to clean up
+alloc.free(slice)
+
+
+```
+You can also use defer to execute a statement at the end of a scope.
+```rust
+{
+	slice Slice[u8] = alloc.alloc:[u8](1024) 
+	defer alloc.free(slice)
+	
+	print(slice[0])
+	// defer is executed here
+}
+```
