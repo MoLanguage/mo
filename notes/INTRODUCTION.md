@@ -182,7 +182,7 @@ fn init[T](list &ConsList[T]) {
 ```
 You could create an instance like this:
 ```
-cats List[Cat] = undef
+cats List[Cat] = undef // undef means uninitialized memory
 cats.init() // init() allocates memory for the list and initializes it to zero
 ```
 The compiler just creates a separate variant of ConsList and its methods (in this case append and init) with Cat being replaced for the generic type T (monomorphization). 
