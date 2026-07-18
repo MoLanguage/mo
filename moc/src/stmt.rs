@@ -37,6 +37,8 @@ pub enum StmtKind {
     Ret(Option<Expr>), // return statement
     CodeBlock(CodeBlock),
     Next,
+
+    Error // When parsing of a statement fails this will be inserted into the AST
 }
 
 #[derive(Clone, Debug, Serialize)]

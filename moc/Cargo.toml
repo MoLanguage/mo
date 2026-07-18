@@ -10,4 +10,8 @@ thiserror = "2.0.18"
 itertools = "0.14.0"
 log = "0.4.29"
 ron.workspace = true
+cstree.workspace = true
+num = "0.4.3"
+num-derive = "0.4.2"
+num-traits = "0.2.19"
 

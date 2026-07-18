@@ -86,7 +86,7 @@ impl Ident {
 #[derive(Debug, Clone, Serialize)]
 pub enum TypeExpr {
     Ident(Ident),
-    Pointer(Box<TypeExpr>),
+    Reference(Box<TypeExpr>),
     Array {
         length: Option<usize>,
         type_expr: Box<TypeExpr>,
@@ -95,6 +95,7 @@ pub enum TypeExpr {
         ident: Ident,
         args: Vec<TypeExpr>, // identifiers of generic type parameters
     },
+    Error // When parsing of an expression fails this will be inserted into the AST
 }
 
 // used in impl declaration items.
@@ -112,8 +113,8 @@ pub struct GenericParam {
 }
 
 impl TypeExpr {
-    pub fn pointer(type_expr: Self) -> Self {
-        Self::Pointer(Box::new(type_expr))
+    pub fn reference(type_expr: Self) -> Self {
+        Self::Reference(Box::new(type_expr))
     }
 }
 

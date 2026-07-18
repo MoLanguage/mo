@@ -231,7 +231,7 @@ fn main() {
 ```
 
 ### Arrays
-Arrays are just a fixed-size list of values of the same type. Unlike in other languages, the array type does not have specific accessor syntax like `[]` in C, Java, Rust, Python etc. Instead there are built-in functions for accessing array elements like `get` and `set`. This makes the syntax more consistent and allows for a simpler language grammar. 
+Arrays are just a fixed-size list of values of the same type.
 
 You can create an array like this:
 ```
@@ -290,7 +290,7 @@ addr u64 = cast:[u64](ptr)
 Memory management will use passed allocators and context allocators like in Zig and Odin. The details still need to be figured out.
 
 ```rust
-array Array[u8, 1024] = zero
+array Array[u8, 1024] = zero // a number as generic type? hmmm
 	
 slice Slice[u8] = alloc.alloc:[u8](1024) 
 

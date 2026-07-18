@@ -9,6 +9,7 @@ pub mod token;
 pub mod semantic;
 pub mod parser;
 pub mod lexer;
+pub mod syntax;
 
 use std::{
     collections::VecDeque,
@@ -19,8 +20,7 @@ use derive_more::Display;
 use serde::Serialize;
 
 use crate::{
-    expr::TypeExpr,
-    stmt::Stmt,
+    error::Diagnostic, expr::TypeExpr, stmt::Stmt,
 };
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -178,13 +178,13 @@ impl TypedVar {
 
 use std::{fs::File, io::Read, path::Path};
 
-use crate::{ast::Ast, error::CompilerError, token::Token};
+use crate::{ast::Ast, token::Token};
 use crate::{lexer::Lexer, parser::Parser};
 
 pub struct CompileResultData {
     pub tokens: Option<Vec<Token>>,
     pub ast: Option<Ast>,
-    pub errors: Vec<CompilerError>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl CompileResultData {
@@ -192,7 +192,7 @@ impl CompileResultData {
         Self {
             tokens: None,
             ast: None,
-            errors: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 }
@@ -219,10 +219,10 @@ pub fn compile_file(path: impl AsRef<Path>, options: CompilerOptions) -> Compile
             file.read_to_string(&mut src).unwrap(); // TO-DO: Handle error
             let mut lexer = Lexer::new(&src);
             let tokens = lexer.tokens();
-            for lexer_error in lexer.errors {
+            for lexer_error in lexer.diagnostics {
                 meta_data
-                    .errors
-                    .push(CompilerError::LexerError(lexer_error));
+                    .diagnostics
+                    .push(lexer_error);
             }
             if options.emit_tokens {
                 meta_data.tokens = Some(tokens.clone()); // TODO: Find out how how to not clone all the tokens
@@ -237,18 +237,18 @@ pub fn compile_file(path: impl AsRef<Path>, options: CompilerOptions) -> Compile
             if options.emit_ast {
                 meta_data.ast = Some(ast.clone());
             }
-            for parser_error in &parser.errors {
+            for parser_error in &parser.diagnostics {
                 meta_data
-                    .errors
-                    .push(CompilerError::ParserError(parser_error.clone()));
+                    .diagnostics
+                    .push(parser_error.clone());
             }
 
-            if parser.errors.len() == 0 {
+            if parser.diagnostics.len() == 0 {
                 // TODO: continue into semantic analysis
             }
         }
         Err(io_error) => {
-            meta_data.errors.push(CompilerError::FileNotFound(io_error));
+        	eprintln!("{:?}", io_error)
         }
     }
     meta_data

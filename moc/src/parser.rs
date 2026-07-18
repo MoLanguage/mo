@@ -1,30 +1,26 @@
 use std::{collections::VecDeque, usize, vec::IntoIter};
 
-use itertools::{PeekNth, peek_nth};
-use log::debug;
 use crate::{
     CodeBlock, CodeSpan, ModulePath, TypedVar,
     ast::Ast,
     decl::{Decl, DeclKind, FnSignature, Variant, VariantData},
-    error::{ExprParseResult, ParserError},
+    error::{Diagnostic, ExprParseResult, ParserError},
     expr::{Expr, ExprKind, GenericParam, Ident, ImplDeclPart, TypeExpr},
     op::{BinaryOp, UnaryOp},
     stmt::{Stmt, StmtKind},
     token::{Token, TokenKind},
 };
+use itertools::{PeekNth, peek_nth};
+use log::debug;
 
 pub struct Parser {
     token_stream: PeekNth<IntoIter<Token>>,
     current_token: Option<Token>,
     ast: Ast,
-    pub errors: Vec<ParserError>,
+    pub diagnostics: Vec<Diagnostic>,
     only_expr: bool, // if true only parses an expression, if false, parses full program structure.
     bracket_depth: usize,
 }
-
-/*
- * Writing a parser in Rust for a programming language. Now the Token struct has a codespan field where the lexer inserts where in the code (start line +column and end line + column) the Token is situated. Now I'd like to have something similar for AST nodes. But the way they are architected (with Rust enums) there is no easy way to add codespans to each ast node. Please help me with rearchitecting that.
- */
 
 impl Parser {
     pub fn new(tokens: Vec<Token>, only_expr: bool) -> Self {
@@ -32,9 +28,9 @@ impl Parser {
             token_stream: peek_nth(tokens),
             current_token: None,
             ast: Ast::new(),
-            errors: Vec::new(),
+            diagnostics: Vec::new(),
             only_expr,
-            bracket_depth: 0
+            bracket_depth: 0,
         };
         parser
     }
@@ -61,11 +57,11 @@ impl Parser {
                     let span = expr.span;
                     self.ast.push(Decl::new(DeclKind::LooseExpr(expr), span));
                 }
-                Err(error) => self.errors.push(error),
+                Err(error) => self.diagnostics.push(error.into()),
             }
         } else {
             if let Err(error) = self.parse_top_level_decls() {
-                self.errors.push(error);
+                self.diagnostics.push(error.into());
             }
         }
         &self.ast
@@ -334,11 +330,11 @@ impl Parser {
                     }
                     _ => {
                         // Just add error, don't stop the loop...
-                        self.errors.push(ParserError::unexpected_token(
+                        self.diagnostics.push(ParserError::unexpected_token(
                             "Unexpected token parsing top-level declarations",
                             Some(token.clone()),
                             token.span,
-                        ));
+                        ).into());
                         self.synchronize_top_level();
                     }
                 }
@@ -363,15 +359,16 @@ impl Parser {
             let is_unambiguous_decl = parser.is_next_of_kinds(&[
                 TokenKind::Fn,
                 TokenKind::Struct,
-                TokenKind::Use, 
+                TokenKind::Use,
                 TokenKind::Sum,
                 TokenKind::Trait,
             ]);
 
-            let is_top_lvl_impl_decl = parser.is_next_of_kind(TokenKind::Impl) && parser.bracket_depth == 0;
+            let is_top_lvl_impl_decl =
+                parser.is_next_of_kind(TokenKind::Impl) && parser.bracket_depth == 0;
             let keep_skipping = !(is_unambiguous_decl || is_top_lvl_impl_decl);
             // we only stop skipping if we find an unambiguous declaration (which is indicated by the tokens Fn, Struct Use, Sum and Trait)
-            // or if we find an impl token that isnt inside of square brackets 
+            // or if we find an impl token that isnt inside of square brackets
             keep_skipping
         });
     }
@@ -428,11 +425,11 @@ impl Parser {
                     continue;
                 }
                 let token = self.peek().cloned();
-                self.errors.push(ParserError::unexpected_token(
+                self.diagnostics.push(ParserError::unexpected_token(
                     "Expected argument delimiter ',' or closed parenthesis ')'",
                     token.clone(),
                     token.unwrap().span,
-                ));
+                ).into());
                 self.advance();
             }
         }
@@ -482,7 +479,6 @@ impl Parser {
             self.skip_tokens(TokenKind::LineBreak);
         }
     }
-
 
     /// Parses optional generic parameters with optional trait bounds
     /// generic_params <- '[' ( generic_param ( ',' generic_param ','? )* )* ']'
@@ -588,7 +584,10 @@ impl Parser {
             }
         }
         self.end_span(&mut span);
-        Ok(Decl { span, kind: DeclKind::Impl { parts: traits } })
+        Ok(Decl {
+            span,
+            kind: DeclKind::Impl { parts: traits },
+        })
     }
 
     /// stmt <- ret_stmt | defer_stmt | break_stmt | next_stmt | code_block | var_decl | expr
@@ -627,9 +626,11 @@ impl Parser {
             let expr = self.parse_expression()?;
 
             // If the next token isn't a valid terminator or the end of a block, throw an error!
-            if !self.matches_any(&[TokenKind::LineBreak, TokenKind::Semicolon])
-                && !self.matches(TokenKind::CloseBrace)
-            {
+            if !self.matches_any(&[
+                TokenKind::LineBreak,
+                TokenKind::Semicolon,
+                TokenKind::CloseBrace,
+            ]) {
                 let token = self.peek();
                 return Err(ParserError::unexpected_token(
                     "Expected newline or semicolon after expression statement",
@@ -651,73 +652,63 @@ impl Parser {
         ))
     }
 
-
-    // var_decl <- ident type_expr? ':=' expr
+    // var_decl <- ident type_expr '=' expr | ident ':=' expr
     //
     // Examples:
-    // a i32 := 10    | DeclAssignmt
-    // a := 10        | DeclAssignmt (no type identifier. type to be inferred)
-    // a [3]i32 := 10 | DeclAssignmt with complex type
+    // a i32 = 10    | DeclAssignmt
+    // a := 10       | DeclAssignmt (no type identifier and ':=', type to be inferred)
     fn parse_var_decl(&mut self) -> Result<Option<Stmt>, ParserError> {
         let mut span = self.start_span_at_current();
 
-        // 1. Scan ahead to find out if this statement contains a ':='
-        let mut i = 0;
-        let mut is_decl = false;
+        // <ident> := <expr>
+        if self
+            .peek_nth(1)
+            .is_some_and(|t| t.is_of_kind(TokenKind::ColonEquals))
+        {
+            self.advance_n(2);
+            let ident = self.unwrap_current_token().unwrap_value();
+            let expr = self.parse_expression()?;
+            self.end_span(&mut span);
+            let stmt = Stmt::new(
+                StmtKind::LocalVarDeclAssign {
+                    ident,
+                    type_expr: None,
+                    value: expr,
+                },
+                span,
+            );
+            return Ok(Some(stmt));
+        }
 
-        loop {
-            match self.peek_nth(i) {
-                Some(token) if token.kind == TokenKind::DeclareAssign => {
-                    is_decl = true;
-                    break;
-                }
-                Some(token)
-                    if token.is_of_any_kinds(&[
-                        TokenKind::LineBreak,
-                        TokenKind::Semicolon,
-                        TokenKind::Equals,
-                        TokenKind::OpenBrace,
-                    ]) =>
-                {
-                    // We hit a statement boundary or an assignment, so it's not a var decl
-                    break;
-                }
-                None => break, // EOF
-                _ => i += 1,
+        // <ident> <type> = <expr>
+
+        if self.matches_nth(1, TokenKind::Ident) {
+            if self.matches_nth_any(2, &[TokenKind::Ident, TokenKind::Ampersand]) {
+                // alright, we have a type expression here.
+                let ident = self.advance().unwrap().unwrap_value();
+                let type_expr = self.parse_type_expr();
+                let peeking = self.peek().cloned();
+                match type_expr {
+                    Ok(type_expr) => {
+                        let value = self.parse_expression()?;
+                        return Ok(Some(Stmt::new(
+                            StmtKind::LocalVarDeclAssign {
+                                ident,
+                                type_expr: Some(type_expr),
+                                value,
+                            },
+                            span,
+                        )));
+                    }
+                    Err(_) => self.diagnostics.push(ParserError::UnexpectedToken {
+                        msg: "expected type expr".into(),
+                        peeking,
+                        span,
+                    }.into()),
+                }; // horrible error handling, missing synchronization etc.... really need to tackle this.
             }
         }
-
-        // 2. If no ':=' was found, bail out so parse_stmt can parse it as an expression.
-        if !is_decl {
-            return Ok(None);
-        }
-
-        // 3. We are guaranteed this is a variable declaration now!
-
-        // consume the variable identifier
-        let ident = self.advance().unwrap().unwrap_value();
-
-        // 4. Parse the optional type expression
-        let mut type_expr = None;
-        if !self.matches(TokenKind::DeclareAssign) {
-            // If the next token isn't ':=', there must be a type expression here
-            type_expr = Some(self.parse_type_expr()?);
-        }
-
-        // 5. Consume ':=' and parse the value
-        self.try_consume_token(TokenKind::DeclareAssign, "Expected ':='")?;
-        let value = self.parse_expression()?;
-
-        self.end_span(&mut span);
-
-        Ok(Some(Stmt::new(
-            StmtKind::LocalVarDeclAssign {
-                ident,
-                type_expr,
-                value,
-            },
-            span,
-        )))
+        Ok(None)
     }
 
     // array_literal <- '[' ( expr ( ',' expr )* )* ']'
@@ -757,14 +748,14 @@ impl Parser {
         return Ok(Expr::new(ExprKind::ArrayLiteral { elements }, span));
     }
 
-
-    // type_expr <- array_type | pointer_type | ident_type
+    // starts with Ampersand or Ident
+    // type_expr <- pointer_type | ident_type
     #[track_caller]
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParserError> {
         debug!("parsing type expr from: {}", std::panic::Location::caller());
         let mut span = self.start_span_at_next();
 
-
+        /*
         // array_type <- '[' decimal_integer_number_literal? ']' type_expr
         let mut array_length = None;
         if self.matches_advance(TokenKind::OpenBrack) {
@@ -783,10 +774,11 @@ impl Parser {
                 type_expr: Box::new(self.parse_type_expr()?),
             });
         }
+         */
 
-        // pointer_type <- '*' type_expr
-        if self.matches_advance(TokenKind::Star) {
-            return Ok(TypeExpr::pointer(self.parse_type_expr()?));
+        // reference_type <- '&' type_expr
+        if self.matches_advance(TokenKind::Ampersand) {
+            return Ok(TypeExpr::reference(self.parse_type_expr()?));
         }
 
         // identifier with optional module path prefix
@@ -1220,7 +1212,7 @@ impl Parser {
         self.current_token = self.token_stream.next();
 
         if let Some(current_token) = &self.current_token() {
-            match current_token.kind  {
+            match current_token.kind {
                 TokenKind::OpenBrack => self.bracket_depth += 1,
                 TokenKind::CloseBrack => self.bracket_depth = self.bracket_depth.saturating_sub(1),
                 _ => {}
@@ -1332,9 +1324,9 @@ impl Parser {
     }
 
     #[track_caller]
-    fn matches_advance(&mut self, token: TokenKind) -> bool {
+    fn matches_advance(&mut self, token_kind: TokenKind) -> bool {
         debug!("{}", std::panic::Location::caller());
-        if self.is_next_of_kind(token) {
+        if self.is_next_of_kind(token_kind) {
             self.advance();
             return true;
         }
@@ -1342,8 +1334,8 @@ impl Parser {
     }
 
     /// checks if next token is of one of the given types
-    fn matches_any(&mut self, tokens: &[TokenKind]) -> bool {
-        if self.is_next_of_kinds(tokens) {
+    fn matches_any(&mut self, token_kinds: &[TokenKind]) -> bool {
+        if self.is_next_of_kinds(token_kinds) {
             return true;
         }
         false
@@ -1351,20 +1343,36 @@ impl Parser {
 
     #[allow(dead_code)]
     #[track_caller]
-    fn matches(&mut self, token: TokenKind) -> bool {
+    fn matches(&mut self, token_kind: TokenKind) -> bool {
         debug!("{}", std::panic::Location::caller());
-        if self.is_next_of_kind(token) {
+        if self.is_next_of_kind(token_kind) {
             return true;
+        }
+        false
+    }
+
+    /// Checks if token at nth position
+    fn matches_nth(&mut self, n: usize, token_kind: TokenKind) -> bool {
+        if let Some(token) = self.peek_nth(n) {
+            return token.is_of_kind(token_kind);
+        }
+        false
+    }
+
+    /// Checks if any of the given token kinds are at nth position
+    fn matches_nth_any(&mut self, n: usize, token_kinds: &[TokenKind]) -> bool {
+        if let Some(token) = self.peek_nth(n) {
+            return token.is_of_any_kinds(token_kinds);
         }
         false
     }
 
     /// peeks multiple tokens to see if they match the given token types in row.
     #[allow(dead_code)]
-    fn matches_in_row(&mut self, tokens: &[TokenKind]) -> bool {
-        for (n, token_type) in tokens.iter().enumerate() {
+    fn matches_in_row(&mut self, token_kinds: &[TokenKind]) -> bool {
+        for (n, token_kind) in token_kinds.iter().enumerate() {
             if let Some(peeked_token) = self.peek_nth(n) {
-                if &peeked_token.kind == token_type {
+                if &peeked_token.kind == token_kind {
                     continue;
                 } else {
                     return false;
@@ -1387,9 +1395,9 @@ impl Parser {
     }
 
     // checks if the following token is of the given type.
-    fn is_next_of_kind(&mut self, token_type: TokenKind) -> bool {
+    fn is_next_of_kind(&mut self, token_kind: TokenKind) -> bool {
         if let Some(current_token) = self.peek() {
-            if token_type == current_token.kind && token_type != TokenKind::EndOfFile {
+            if token_kind == current_token.kind && token_kind != TokenKind::EndOfFile {
                 // TODO: Check if EndOfFile check is necessary
                 return true;
             }
@@ -1398,8 +1406,8 @@ impl Parser {
     }
 
     // checks if the following token is of one of the given types.
-    fn is_next_of_kinds(&mut self, tokens: &[TokenKind]) -> bool {
-        for token in tokens {
+    fn is_next_of_kinds(&mut self, token_kinds: &[TokenKind]) -> bool {
+        for token in token_kinds {
             if self.is_next_of_kind(*token) {
                 return true;
             }
@@ -1408,8 +1416,8 @@ impl Parser {
     }
 
     // if next token is of given type, advances. If not, return an error with given message.
-    fn try_consume_token(&mut self, token_type: TokenKind, msg: &str) -> Result<(), ParserError> {
-        if self.is_next_of_kind(token_type) {
+    fn try_consume_token(&mut self, token_kind: TokenKind, msg: &str) -> Result<(), ParserError> {
+        if self.is_next_of_kind(token_kind) {
             self.advance();
             return Ok(());
         }
@@ -1422,8 +1430,12 @@ impl Parser {
     }
 
     /// If next token is of any of given types, advances. If not, return an error with given message.
-    fn try_consume_token2(&mut self, tokens: &[TokenKind], msg: &str) -> Result<(), ParserError> {
-        if self.is_next_of_kinds(tokens) {
+    fn try_consume_token2(
+        &mut self,
+        token_kinds: &[TokenKind],
+        msg: &str,
+    ) -> Result<(), ParserError> {
+        if self.is_next_of_kinds(token_kinds) {
             self.advance();
             return Ok(());
         }

@@ -2,16 +2,15 @@ use std::str::Chars;
 
 use itertools::{PeekNth, peek_nth};
 use log::debug;
-use crate::error::{LexerError, LexerResult};
+use crate::error::{Diagnostic, LexerError, LexerResult};
 use crate::token::{NumberLiteralKind, Token, TokenKind, TokenKind::*};
 use crate::{CodeLocation, CodeSpan};
 
-#[derive(Clone)]
 pub struct Lexer<'a> {
     chars: PeekNth<Chars<'a>>,
     last_token_end: CodeLocation,
     location: CodeLocation,
-    pub errors: Vec<LexerError>
+    pub diagnostics: Vec<Diagnostic>
 }
 
 impl<'a> Lexer<'a> {
@@ -20,7 +19,7 @@ impl<'a> Lexer<'a> {
             chars: peek_nth(input.chars()),
             location: CodeLocation::default(),
             last_token_end: CodeLocation::default(),
-            errors: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -33,7 +32,7 @@ impl<'a> Lexer<'a> {
                 } else {
                     tokens.push(token);
                 },
-                Err(error) => self.errors.push(error),
+                Err(error) => self.diagnostics.push(error.into()),
             }
         }
         tokens
@@ -175,7 +174,7 @@ impl<'a> Lexer<'a> {
                         self.advance();
                         if self.peek_char() == Some('=') {
                             self.advance();
-                            break Ok(self.new_token(DeclareAssign));
+                            break Ok(self.new_token(ColonEquals));
                         }
                         break Ok(self.new_token(Colon));
                     }
@@ -198,7 +197,7 @@ impl<'a> Lexer<'a> {
                     'a'..='z' | 'A'..='Z' | '_' => break Ok(self.lex_keyword_or_ident()),
                     '\"' => break self.lex_string_literal(),
                     _ => {
-                        self.errors.push(LexerError::InvalidCharacter(ch, self.current_span()));
+                        self.diagnostics.push(LexerError::InvalidCharacter(ch, self.current_span()).into());
                     }
                 }
             } else {

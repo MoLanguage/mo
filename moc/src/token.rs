@@ -67,7 +67,7 @@ pub enum TokenKind {
     CloseBrack,
     Colon,
     Comma,
-    DeclareAssign, // :=
+    ColonEquals, // :=
     Defer,
     DivAssign, // /=
     Dot,
@@ -218,7 +218,7 @@ impl Token {
         matches!(
             self.kind,
             Equals
-                | DeclareAssign
+                | ColonEquals
                 | AddAssign
                 | SubAssign
                 | MultAssign
@@ -268,7 +268,7 @@ impl Token {
             Dot => Some((120, 0)),
             OpenBrack => Some((110, 0)),
             TokenKind::Colon => Some((9, 10)),
-            DeclareAssign | Equals | AddAssign | SubAssign | MultAssign | DivAssign | ModAssign
+            ColonEquals | Equals | AddAssign | SubAssign | MultAssign | DivAssign | ModAssign
             | BitAndAssign | BitOrAssign | BitNotAssign | BitXorAssign | BitShiftLeftAssign
             | BitShiftRightAssign => Some((10, 9)), // Right-associative assignment
             _ => None,

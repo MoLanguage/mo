@@ -44,6 +44,7 @@ pub enum DeclKind {
     // global variable/constant?
     // Only for debugging stuff! If I want to just test parsing expressions without all the other shebang.
     LooseExpr(Expr),
+    Error // When parsing of a declaration fails this will be inserted into the AST
 }
 
 #[derive(Debug, Clone, Serialize)]

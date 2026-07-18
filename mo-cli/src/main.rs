@@ -39,9 +39,9 @@ fn main() {
             .expect("Error writing to stdout");
         println!(); // add newline char
     }
-    if !result.errors.is_empty() {
-        for error in result.errors {
-            println!("Compiler error: {:?}", error)
+    if !result.diagnostics.is_empty() {
+        for diagnostic in result.diagnostics {
+            println!("Compiler error: {:?}", diagnostic)
         }
     }
 }
