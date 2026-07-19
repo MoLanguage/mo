@@ -330,11 +330,14 @@ impl Parser {
                     }
                     _ => {
                         // Just add error, don't stop the loop...
-                        self.diagnostics.push(ParserError::unexpected_token(
-                            "Unexpected token parsing top-level declarations",
-                            Some(token.clone()),
-                            token.span,
-                        ).into());
+                        self.diagnostics.push(
+                            ParserError::unexpected_token(
+                                "Unexpected token parsing top-level declarations",
+                                Some(token.clone()),
+                                token.span,
+                            )
+                            .into(),
+                        );
                         self.synchronize_top_level();
                     }
                 }
@@ -425,11 +428,14 @@ impl Parser {
                     continue;
                 }
                 let token = self.peek().cloned();
-                self.diagnostics.push(ParserError::unexpected_token(
-                    "Expected argument delimiter ',' or closed parenthesis ')'",
-                    token.clone(),
-                    token.unwrap().span,
-                ).into());
+                self.diagnostics.push(
+                    ParserError::unexpected_token(
+                        "Expected argument delimiter ',' or closed parenthesis ')'",
+                        token.clone(),
+                        token.unwrap().span,
+                    )
+                    .into(),
+                );
                 self.advance();
             }
         }
@@ -658,15 +664,16 @@ impl Parser {
     // a i32 = 10    | DeclAssignmt
     // a := 10       | DeclAssignmt (no type identifier and ':=', type to be inferred)
     fn parse_var_decl(&mut self) -> Result<Option<Stmt>, ParserError> {
-        let mut span = self.start_span_at_current();
+        let mut span = self.start_span_at_next();
 
         // <ident> := <expr>
         if self
             .peek_nth(1)
             .is_some_and(|t| t.is_of_kind(TokenKind::ColonEquals))
         {
-            self.advance_n(2);
-            let ident = self.unwrap_current_token().unwrap_value();
+
+        	let ident = self.advance().unwrap().unwrap_value(); // consume identifier
+            self.advance(); // consume :=
             let expr = self.parse_expression()?;
             self.end_span(&mut span);
             let stmt = Stmt::new(
@@ -682,32 +689,37 @@ impl Parser {
 
         // <ident> <type> = <expr>
 
-        if self.matches_nth(1, TokenKind::Ident) {
-            if self.matches_nth_any(2, &[TokenKind::Ident, TokenKind::Ampersand]) {
-                // alright, we have a type expression here.
-                let ident = self.advance().unwrap().unwrap_value();
-                let type_expr = self.parse_type_expr();
-                let peeking = self.peek().cloned();
-                match type_expr {
-                    Ok(type_expr) => {
-                        let value = self.parse_expression()?;
-                        return Ok(Some(Stmt::new(
-                            StmtKind::LocalVarDeclAssign {
-                                ident,
-                                type_expr: Some(type_expr),
-                                value,
-                            },
-                            span,
-                        )));
-                    }
-                    Err(_) => self.diagnostics.push(ParserError::UnexpectedToken {
+        if self.matches_nth_any(1, &[TokenKind::Ident, TokenKind::Ampersand]) {
+            // alright, we have a type expression here.
+            dbg!("trying to parse type expr");
+            let ident = self.advance().unwrap().unwrap_value();
+            let type_expr = self.parse_type_expr();
+            self.advance(); // consume '='
+            let peeking = self.peek().cloned();
+            match type_expr {
+                Ok(type_expr) => {
+                    let value = self.parse_expression()?;
+                    self.end_span(&mut span);
+                    return Ok(Some(Stmt::new(
+                        StmtKind::LocalVarDeclAssign {
+                            ident,
+                            type_expr: Some(type_expr),
+                            value,
+                        },
+                        span,
+                    )));
+                }
+                Err(_) => self.diagnostics.push(
+                    ParserError::UnexpectedToken {
                         msg: "expected type expr".into(),
                         peeking,
                         span,
-                    }.into()),
-                }; // horrible error handling, missing synchronization etc.... really need to tackle this.
-            }
+                    }
+                    .into(),
+                ),
+            }; // horrible error handling, missing synchronization etc.... really need to tackle this.
         }
+
         Ok(None)
     }
 

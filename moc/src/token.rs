@@ -245,9 +245,9 @@ impl Token {
         self.kind == kind
     }
 
-    pub fn is_of_any_kinds(&self, types: &[TokenKind]) -> bool {
-        for r#type in types {
-            if self.is_of_kind(*r#type) {
+    pub fn is_of_any_kinds(&self, token_kinds: &[TokenKind]) -> bool {
+        for kind in token_kinds {
+            if self.is_of_kind(*kind) {
                 return true;
             }
         }
