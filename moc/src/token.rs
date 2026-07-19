@@ -218,7 +218,6 @@ impl Token {
         matches!(
             self.kind,
             Equals
-                | ColonEquals
                 | AddAssign
                 | SubAssign
                 | MultAssign
