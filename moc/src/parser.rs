@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, usize, vec::IntoIter};
+use std::{collections::VecDeque, panic, usize, vec::IntoIter};
 
 use crate::{
     CodeBlock, CodeSpan, ModulePath, TypedVar,
@@ -12,6 +12,8 @@ use crate::{
 };
 use itertools::{PeekNth, peek_nth};
 use log::debug;
+
+const LINE_TERMINATORS: &[TokenKind] = &[TokenKind::LineBreak, TokenKind::Semicolon];
 
 pub struct Parser {
     token_stream: PeekNth<IntoIter<Token>>,
@@ -120,6 +122,7 @@ impl Parser {
             }
             OpenBrack => self.parse_array_literal(),
             If => self.parse_if_else_expr(),
+            Dot => Ok(self.parse_struct_initializer()),
             _ => Err(ParserError::UnexpectedToken {
                 msg: "Expected an expression".into(),
                 peeking: Some(token.clone()),
@@ -190,6 +193,12 @@ impl Parser {
                             },
                             span,
                         );
+                        continue;
+                    }
+
+                    if self.matches_advance(TokenKind::OpenBrace) {
+                        // struct / initializer
+                        left = self.parse_struct_initializer();
                         continue;
                     }
 
@@ -291,6 +300,90 @@ impl Parser {
 
     // <<< PRATT PARSING END
 
+    /// # Struct initializer
+    ///
+    /// # Grammar
+    /// struct_initializer <- '.' '{' (<field_ident> '=' <expr>) ( ( ';' | <line_break> ) <field_ident> '=' <expr> )* '}'
+    ///
+    /// # Examples:
+    ///
+    /// .{}, .{ name = "Beans" }, .{ name = "Matz"; age = 19 }
+    ///
+    /// ## Multiline:
+    /// .{
+    /// 	name = "Beans"
+    ///  },
+    ///
+    /// No ';' needed to seperate field initializations
+    /// .{
+    /// 	name = "Matz"
+    /// 	age = 19
+    /// }
+    fn parse_struct_initializer(&mut self) -> Expr {
+        let mut span = self.start_span_at_current();
+        if let Err(err) = self.try_consume_token(
+            TokenKind::OpenBrace,
+            "Expected open brace for struct initializer",
+        ) {
+            self.skip_tokens_until_of_kind(TokenKind::CloseBrace);
+            self.advance();
+            self.diagnostics.push(err.into());
+            self.end_span(&mut span);
+            return Expr::error(span);
+        }
+        loop {
+            self.skip_line_terminators();
+            let mut field_inits: Vec<(String, Expr)> = Vec::new();
+            if self.matches(TokenKind::Ident) {
+                let field_name = self.advance().unwrap();
+                if let Err(err) = self.try_consume_token(TokenKind::Equals, "expected '='") {
+                    self.diagnostics.push(err.into());
+                    // skip over faulty field initialization until end of field initialization or struct initialization
+                    panic!();
+                    self.skip_tokens_until_of_kinds(&[
+                        TokenKind::Semicolon, TokenKind::LineBreak,  // end of field init
+                        TokenKind::CloseBrace, // end of struct init // fixme: this wont work, because what if a field is initialized with another struct initializer as expression?
+                    ]);
+                    continue;
+                }
+                match self.parse_expression() {
+                    Ok(expr) => {
+                        field_inits.push((field_name.unwrap_value(), expr));
+                    }
+                    Err(error) => {
+                        self.diagnostics.push(error.into_diagnostic());
+                        field_inits.push((field_name.unwrap_value(), Expr::error(span)));
+                        // TODO: synchronize parser :(
+                        // skip over faulty field initialization until end of field initialization or struct initialization
+                        self.skip_tokens_until_of_kinds(&[
+                            TokenKind::Semicolon,
+                            TokenKind::LineBreak,  // end of field init
+                            TokenKind::CloseBrace, // end of struct init
+                        ]);
+                    }
+                };
+                if self.matches_any_advance(&[TokenKind::Semicolon, TokenKind::LineBreak]) {
+                    continue;
+                }
+            } else if self.is_next_of_kind(TokenKind::CloseBrace) {
+                self.advance();
+                self.end_span(&mut span);
+                break Expr::new(
+                    ExprKind::StructInitializer {
+                        fields: field_inits,
+                    },
+                    span,
+                );
+            } else {
+                let peeked = self.peek().cloned();
+                self.diagnostics.push(
+                    ParserError::unexpected_token("Expected st ", peeked, span).into_diagnostic(),
+                );
+                self.end_span(&mut span);
+                return Expr::new(ExprKind::Error, span);
+            }
+        }
+    }
     /// Parses the top level declarations within .mo files that declare items.
     fn parse_top_level_decls(&mut self) -> Result<(), ParserError> {
         loop {
@@ -671,8 +764,7 @@ impl Parser {
             .peek_nth(1)
             .is_some_and(|t| t.is_of_kind(TokenKind::ColonEquals))
         {
-
-        	let ident = self.advance().unwrap().unwrap_value(); // consume identifier
+            let ident = self.advance().unwrap().unwrap_value(); // consume identifier
             self.advance(); // consume :=
             let expr = self.parse_expression()?;
             self.end_span(&mut span);
@@ -1037,8 +1129,7 @@ impl Parser {
         ))
     }
 
-    ///
-    /// sum_decl <- 'sum' ident
+    // TODO: Add grammar and example documentation
     fn parse_sum_decl(&mut self) -> Result<Decl, ParserError> {
         self.advance(); // consume 'sum' (assuming TokenKind::Sum)
         let mut span = self.start_span_at_current();
@@ -1224,6 +1315,7 @@ impl Parser {
         self.current_token = self.token_stream.next();
 
         if let Some(current_token) = &self.current_token() {
+        	// TODO: replace with a better scope depth tracking solution
             match current_token.kind {
                 TokenKind::OpenBrack => self.bracket_depth += 1,
                 TokenKind::CloseBrack => self.bracket_depth = self.bracket_depth.saturating_sub(1),
@@ -1287,13 +1379,19 @@ impl Parser {
         }
     }
 
-    /// Skips all tokens that are not of the given kinds until it hits a token of the kinds given
+    /// Skips all tokens that are not of the given kinds until it peeks a token of the kinds given
     #[allow(dead_code)]
-    fn skip_tokens_unless_of_kinds(&mut self, token_kinds: &[TokenKind]) {
+    fn skip_tokens_until_of_kinds(&mut self, token_kinds: &[TokenKind]) {
         self.skip_tokens_if_predicate(|parser| !parser.is_next_of_kinds(token_kinds));
     }
 
+    #[allow(dead_code)]
+    fn skip_tokens_until_of_kind(&mut self, token_kind: TokenKind) {
+        self.skip_tokens_if_predicate(|parser| !parser.is_next_of_kind(token_kind));
+    }
+
     /// Skips all tokens if the predicate evaluates to true until it evaluates to false
+    /// After it stopped skipping, it will peek at the first token where the predicate evaluates to false.
     fn skip_tokens_if_predicate<F>(&mut self, predicate: F)
     where
         F: Fn(&mut Self) -> bool,
@@ -1314,7 +1412,7 @@ impl Parser {
     }
 
     fn skip_line_terminators(&mut self) {
-        self.skip_tokens_of_kinds(&[TokenKind::LineBreak, TokenKind::Semicolon]);
+        self.skip_tokens_of_kinds(LINE_TERMINATORS);
     }
 
     fn peek(&mut self) -> Option<&Token> {
@@ -1345,22 +1443,16 @@ impl Parser {
         false
     }
 
-    /// checks if next token is of one of the given types
+    /// checks if next token is of one of the given kinds
     fn matches_any(&mut self, token_kinds: &[TokenKind]) -> bool {
-        if self.is_next_of_kinds(token_kinds) {
-            return true;
-        }
-        false
+        self.is_next_of_kinds(token_kinds)
     }
 
     #[allow(dead_code)]
     #[track_caller]
     fn matches(&mut self, token_kind: TokenKind) -> bool {
         debug!("{}", std::panic::Location::caller());
-        if self.is_next_of_kind(token_kind) {
-            return true;
-        }
-        false
+        return self.is_next_of_kind(token_kind);
     }
 
     /// Checks if token at nth position
@@ -1379,7 +1471,7 @@ impl Parser {
         false
     }
 
-    /// peeks multiple tokens to see if they match the given token types in row.
+    /// peeks multiple tokens to see if they match the given token kinds in row.
     #[allow(dead_code)]
     fn matches_in_row(&mut self, token_kinds: &[TokenKind]) -> bool {
         for (n, token_kind) in token_kinds.iter().enumerate() {
@@ -1406,7 +1498,7 @@ impl Parser {
         false
     }
 
-    // checks if the following token is of the given type.
+    // checks if the following token is of the given kind.
     fn is_next_of_kind(&mut self, token_kind: TokenKind) -> bool {
         if let Some(current_token) = self.peek() {
             if token_kind == current_token.kind && token_kind != TokenKind::EndOfFile {
@@ -1417,7 +1509,7 @@ impl Parser {
         false
     }
 
-    // checks if the following token is of one of the given types.
+    // checks if the following token is of one of the given kinds.
     fn is_next_of_kinds(&mut self, token_kinds: &[TokenKind]) -> bool {
         for token in token_kinds {
             if self.is_next_of_kind(*token) {
@@ -1427,7 +1519,7 @@ impl Parser {
         false
     }
 
-    // if next token is of given type, advances. If not, return an error with given message.
+    // if next token is of given kind, advances. If not, return an error with given message.
     fn try_consume_token(&mut self, token_kind: TokenKind, msg: &str) -> Result<(), ParserError> {
         if self.is_next_of_kind(token_kind) {
             self.advance();
@@ -1441,7 +1533,7 @@ impl Parser {
         ))
     }
 
-    /// If next token is of any of given types, advances. If not, return an error with given message.
+    /// If next token is of any of given kinds, advances. If not, return an error with given message.
     fn try_consume_token2(
         &mut self,
         token_kinds: &[TokenKind],
@@ -1459,7 +1551,7 @@ impl Parser {
         ))
     }
 
-    /// Prints some debug info about the current state of the parser
+    /// String with some debug info about the current state of the parser
     fn parser_state_dbg_info(&mut self) -> String {
         let current = self.unwrap_current_token();
         let line = current.span.start.line;

@@ -21,6 +21,9 @@ pub enum ExprKind {
         called_on: Box<Expr>,
         member_ident: Ident,
     },
+    StructInitializer { 
+     	fields: Vec<(String, Expr)>
+    },
     ArrayLiteral {
         elements: Vec<Expr>,
     },
@@ -58,7 +61,7 @@ pub enum ExprKind {
         operator: UnaryOp,
         expr: Box<Expr>,
     }, // Operator followed by another expr
-    Empty,
+    Error,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -133,6 +136,10 @@ impl Expr {
             },
             span,
         )
+    }
+
+    pub fn error(span: CodeSpan) -> Self {
+    	Self::new(ExprKind::Error, span)
     }
 
     pub fn unary(start: CodeLocation, operator: UnaryOp, right: Self) -> Self {
